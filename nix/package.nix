@@ -16,6 +16,7 @@
   pango,
   harfbuzz,
   libxkbcommon,
+  libxcb,
   sdbus-cpp_2,
   systemd,
   pipewire,
@@ -103,6 +104,7 @@ lib.warnIf cudaSupport
     pango
     harfbuzz
     libxkbcommon
+    libxcb
     sdbus-cpp_2
     systemd
     pipewire

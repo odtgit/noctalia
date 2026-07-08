@@ -79,6 +79,7 @@ pangoft2_dep        = dependency('pangoft2')
 harfbuzz_dep        = dependency('harfbuzz')
 librsvg_dep         = dependency('librsvg-2.0')
 xkbcommon_dep       = dependency('xkbcommon')
+xcb_dep             = dependency('xcb')
 glib_dep            = dependency('glib-2.0')
 gobject_dep         = dependency('gobject-2.0')
 gio_dep             = dependency('gio-2.0')
@@ -932,6 +933,7 @@ _noctalia_sources = files(
   'src/shell/wayland/layer_shell.cpp',
   'src/shell/wayland/layer_surface.cpp',
   'src/shell/wayland/output_probe.cpp',
+  'src/x11/xembed_tray_service.cpp',
   'src/theme/scheme.cpp',
   'src/theme/color.cpp',
   'src/theme/contrast.cpp',
@@ -1008,6 +1010,7 @@ _noctalia_system_dependencies = [
   pango_dep,
   pangocairo_dep,
   xkbcommon_dep,
+  xcb_dep,
   glib_dep,
   gobject_dep,
   gio_dep,

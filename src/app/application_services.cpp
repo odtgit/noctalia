@@ -83,6 +83,7 @@
 #include "system/system_monitor_service.h"
 #include "ui/controls/input.h"
 #include "ui/style.h"
+#include "x11/xembed_tray_service.h"
 
 #include <algorithm>
 #include <chrono>
@@ -1654,6 +1655,15 @@ void Application::initEarlySessionBusAndTray() {
   m_trayService->setMenuToggleCallback([this](const std::string& itemId, float contentScale) {
     m_trayMenu.toggleForItem(itemId, contentScale);
   });
+
+  // Legacy XEmbed tray icons (Wine/Proton and other X11-only apps) reach the
+  // tray widget through the same TrayService item list.
+  m_xembedTrayService = std::make_unique<XEmbedTrayService>();
+  m_xembedTrayService->setChangeCallback([this]() {
+    m_bar.refresh();
+    m_trayMenu.onTrayChanged();
+  });
+  m_trayService->setXEmbedSource(m_xembedTrayService.get());
   startTrayService();
 }
 
@@ -1814,6 +1824,14 @@ void Application::startTrayService() {
     m_trayService->start();
   } catch (const std::exception& e) {
     kLog.warn("tray watcher disabled: {}", e.what());
+  }
+
+  if (m_xembedTrayService != nullptr) {
+    try {
+      m_xembedTrayService->start();
+    } catch (const std::exception& e) {
+      kLog.warn("xembed tray disabled: {}", e.what());
+    }
   }
 }
 

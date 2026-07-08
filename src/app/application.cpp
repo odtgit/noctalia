@@ -59,6 +59,7 @@
 #include "ui/dialogs/file_dialog.h"
 #include "ui/dialogs/glyph_picker_dialog.h"
 #include "ui/dialogs/search_picker_popup.h"
+#include "x11/xembed_tray_service.h"
 
 #include <chrono>
 #include <cstring>
