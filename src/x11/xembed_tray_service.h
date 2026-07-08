@@ -89,6 +89,7 @@ private:
   void processEvents();
   void handleClientMessage(const xcb_client_message_event_t& event);
   void adoptOrphanedWineTrayWindows();
+  [[nodiscard]] bool looksLikeWineTrayStrip(xcb_window_t window) const;
   void dockIcon(xcb_window_t window);
   void removeIcon(xcb_window_t window);
   void refreshIconMetadata(xcb_window_t window);

@@ -214,6 +214,13 @@ void XEmbedTrayService::start() {
 
   kLog.info("xembed tray host active on {} ({})", display, selectionName);
 
+  // Watch root children so Wine standalone tray strips can be adopted the
+  // moment they appear, not just the ones that already exist (Wine recreates
+  // its icon asynchronously after a previous tray host dies, so a one-shot
+  // startup scan can race it).
+  const std::uint32_t rootEventMask = XCB_EVENT_MASK_SUBSTRUCTURE_NOTIFY;
+  xcb_change_window_attributes(m_conn, m_root, XCB_CW_EVENT_MASK, &rootEventMask);
+
   adoptOrphanedWineTrayWindows();
 }
 
@@ -234,34 +241,39 @@ void XEmbedTrayService::adoptOrphanedWineTrayWindows() {
     return;
   }
 
-  auto hasProperty = [this](xcb_window_t window, xcb_atom_t property) {
-    const auto reply = getProperty(m_conn, window, property, XCB_ATOM_ANY, 0);
-    return reply != nullptr && reply->type != XCB_NONE;
-  };
-
   const xcb_window_t* children = xcb_query_tree_children(tree.get());
   for (int i = 0; i < xcb_query_tree_children_length(tree.get()); ++i) {
-    const xcb_window_t window = children[i];
-    const XcbReply<xcb_get_window_attributes_reply_t> attributes(
-        xcb_get_window_attributes_reply(m_conn, xcb_get_window_attributes(m_conn, window), nullptr)
-    );
-    if (attributes == nullptr
-        || attributes->map_state != XCB_MAP_STATE_VIEWABLE
-        || attributes->override_redirect != 0) {
-      continue;
+    if (looksLikeWineTrayStrip(children[i])) {
+      dockIcon(children[i]);
     }
-    if (!hasProperty(window, m_atomWineHwndStyle) || !hasProperty(window, m_atomNetWmIcon)) {
-      continue;
-    }
-    const XcbReply<xcb_get_geometry_reply_t> geometry(
-        xcb_get_geometry_reply(m_conn, xcb_get_geometry(m_conn, window), nullptr)
-    );
-    if (geometry == nullptr || geometry->height > 48 || geometry->width > 1024 || geometry->width < 8) {
-      continue;
-    }
-    kLog.info("adopting orphaned Wine tray window 0x{:x} ({}x{})", window, geometry->width, geometry->height);
-    dockIcon(window);
   }
+}
+
+bool XEmbedTrayService::looksLikeWineTrayStrip(xcb_window_t window) const {
+  if (window == XCB_NONE || m_icons.contains(window)) {
+    return false;
+  }
+  const XcbReply<xcb_get_window_attributes_reply_t> attributes(
+      xcb_get_window_attributes_reply(m_conn, xcb_get_window_attributes(m_conn, window), nullptr)
+  );
+  if (attributes == nullptr || attributes->map_state != XCB_MAP_STATE_VIEWABLE || attributes->override_redirect != 0) {
+    return false;
+  }
+  auto hasProperty = [this](xcb_window_t w, xcb_atom_t property) {
+    const auto reply = getProperty(m_conn, w, property, XCB_ATOM_ANY, 0);
+    return reply != nullptr && reply->type != XCB_NONE;
+  };
+  if (!hasProperty(window, m_atomWineHwndStyle) || !hasProperty(window, m_atomNetWmIcon)) {
+    return false;
+  }
+  const XcbReply<xcb_get_geometry_reply_t> geometry(
+      xcb_get_geometry_reply(m_conn, xcb_get_geometry(m_conn, window), nullptr)
+  );
+  if (geometry == nullptr || geometry->height > 48 || geometry->width > 1024 || geometry->width < 8) {
+    return false;
+  }
+  kLog.info("adopting Wine standalone tray window 0x{:x} ({}x{})", window, geometry->width, geometry->height);
+  return true;
 }
 
 void XEmbedTrayService::teardown() {
@@ -365,6 +377,32 @@ bool XEmbedTrayService::sendClick(
   if (rootPos.has_value()) {
     rootX = rootPos->first;
     rootY = rootPos->second;
+
+    // Wine derives the cursor position from its own idea of the icon
+    // window's screen rect plus the event-local coordinates - x_root is
+    // ignored for events on known windows. Parked under our off-screen host
+    // that rect is meaningless, so first move the host to the click position
+    // and tell the icon where it now sits via a synthetic root-relative
+    // ConfigureNotify (the ICCCM mechanism WMs use after reparenting).
+    // Context menus then open where the click happened.
+    const std::uint32_t hostPos[2] = {static_cast<std::uint32_t>(rootX), static_cast<std::uint32_t>(rootY)};
+    xcb_configure_window(m_conn, m_host, XCB_CONFIG_WINDOW_X | XCB_CONFIG_WINDOW_Y, hostPos);
+
+    const XcbReply<xcb_get_geometry_reply_t> geometry(
+        xcb_get_geometry_reply(m_conn, xcb_get_geometry(m_conn, window), nullptr)
+    );
+    xcb_configure_notify_event_t configure{};
+    configure.response_type = XCB_CONFIGURE_NOTIFY;
+    configure.event = window;
+    configure.window = window;
+    configure.above_sibling = XCB_NONE;
+    configure.x = rootX;
+    configure.y = rootY;
+    configure.width = geometry != nullptr ? geometry->width : 24;
+    configure.height = geometry != nullptr ? geometry->height : 24;
+    configure.border_width = 0;
+    configure.override_redirect = 0;
+    xcb_send_event(m_conn, 0, window, XCB_EVENT_MASK_STRUCTURE_NOTIFY, reinterpret_cast<const char*>(&configure));
   } else {
     // Without a mapped click position, fall back to wherever the X pointer
     // last was. Wine-style clients update their cursor belief from the
@@ -398,7 +436,10 @@ bool XEmbedTrayService::sendClick(
   release.state = button == XCB_BUTTON_INDEX_1 ? kButton1Mask : kButton3Mask;
   xcb_send_event(m_conn, 0, window, XCB_EVENT_MASK_BUTTON_RELEASE, reinterpret_cast<const char*>(&release));
   xcb_flush(m_conn);
-  kLog.debug("forwarded button {} click to xembed icon 0x{:x}", button, window);
+  kLog.info(
+      "forwarded button {} click to xembed icon 0x{:x} root=({}, {}) mapped={}", button, window, rootX, rootY,
+      rootPos.has_value()
+  );
   return true;
 }
 
@@ -450,6 +491,30 @@ void XEmbedTrayService::processEvents() {
       const auto& reparent = *reinterpret_cast<const xcb_reparent_notify_event_t*>(event.get());
       if (reparent.parent != m_host) {
         removeIcon(reparent.window);
+      }
+      break;
+    }
+    case XCB_MAP_NOTIFY: {
+      // Root SubstructureNotify: a new toplevel appeared. Adopt it if it is
+      // a Wine standalone tray strip (Wine recreates these asynchronously
+      // when a tray host goes away, and never re-docks them itself).
+      const auto& map = *reinterpret_cast<const xcb_map_notify_event_t*>(event.get());
+      if (map.event == m_root && looksLikeWineTrayStrip(map.window)) {
+        dockIcon(map.window);
+      }
+      break;
+    }
+    case XCB_CONFIGURE_NOTIFY: {
+      // Wine maps its strip tiny and grows it afterwards; the resize can be
+      // what first makes it pass the strip heuristic. The event carries the
+      // new size, so screen out everything else before touching the server.
+      const auto& configure = *reinterpret_cast<const xcb_configure_notify_event_t*>(event.get());
+      if (configure.event == m_root
+          && configure.height <= 48
+          && configure.width <= 1024
+          && configure.width >= 8
+          && looksLikeWineTrayStrip(configure.window)) {
+        dockIcon(configure.window);
       }
       break;
     }
