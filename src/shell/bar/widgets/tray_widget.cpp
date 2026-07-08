@@ -168,6 +168,7 @@ TrayWidget::TrayWidget(ConfigService& config, TrayService* tray, Options options
       m_pinnedItems(std::move(options.pinnedItems)), m_hidePassive(options.hidePassive),
       m_colorizeIcons(options.colorizeIcons), m_drawerMode(options.drawerMode),
       m_itemActivated(std::move(options.itemActivated)), m_barPosition(std::move(options.barPosition)),
+      m_output(options.output),
       m_panelGridMode(options.panelGridMode),
       m_panelGridColumns(std::clamp<std::size_t>(options.panelGridColumns, 1U, 5U)),
       m_inlineEntryGap(std::max(0.0F, options.inlineEntryGap)), m_matchAdjacentSpacing(options.matchAdjacentSpacing),
@@ -809,7 +810,7 @@ void TrayWidget::rebuild(Renderer& renderer) {
       }
       const auto [x, y] = trayPointerCoords(*areaPtr, data);
       if (data.button == BTN_LEFT) {
-        (void)m_tray->activateItem(itemId, x, y);
+        (void)m_tray->activateItem(itemId, x, y, m_output, m_barPosition);
         if (m_itemActivated) {
           m_itemActivated();
         }
@@ -817,7 +818,7 @@ void TrayWidget::rebuild(Renderer& renderer) {
         if (m_tray->itemUsesDBusMenu(itemId)) {
           m_tray->requestMenuToggle(itemId, m_contentScale);
         } else {
-          (void)m_tray->openContextMenu(itemId, x, y);
+          (void)m_tray->openContextMenu(itemId, x, y, m_output, m_barPosition);
         }
       }
     });
@@ -843,7 +844,25 @@ void TrayWidget::rebuild(Renderer& renderer) {
 
     // Touch the tooltip only when its text changed, and only once the area is back in the scene:
     // a change notification re-anchors the shown tooltip, and a detached area has no on-screen position.
-    const std::string tooltipText = tray::formatTrayItemTooltip(item);
+    std::string tooltipText = tray::formatTrayItemTooltip(item);
+    // XEmbed items without a real tooltip (statusNotifierTitle mirrors the
+    // icon window's WM_NAME) fall back to their window class, which reads
+    // poorly ("steam_app_..."). Prefer a desktop-entry name when one maps.
+    if (tray::isXEmbedItem(item) && item.statusNotifierTitle.empty()) {
+      for (const auto* candidate : {&item.itemName, &item.processName, &item.title}) {
+        bool mapped = false;
+        for (const auto& variant : identifierVariants(*candidate)) {
+          if (const auto it = m_appNames.find(variant); it != m_appNames.end()) {
+            tooltipText = it->second;
+            mapped = true;
+            break;
+          }
+        }
+        if (mapped) {
+          break;
+        }
+      }
+    }
     const TooltipContent currentTooltip = areaPtr->tooltipContent();
     const auto* currentText = std::get_if<std::string>(&currentTooltip);
     if (tooltipText.empty()) {
@@ -900,6 +919,7 @@ bool TrayWidget::isIconOverrideBlacklisted(const TrayItemInfo& item) const {
 
 void TrayWidget::buildDesktopIconIndex() {
   m_appIcons.clear();
+  m_appNames.clear();
   const auto& entries = desktopEntries();
   for (const auto& entry : entries) {
     if (entry.id.empty()) {
@@ -913,6 +933,11 @@ void TrayWidget::buildDesktopIconIndex() {
       addIconAlias(m_appIcons, entry.icon, entry.icon);
       addIconAlias(m_appIcons, execBasename(entry.exec), entry.icon);
       addIconAlias(m_appIcons, entry.startupWmClass, entry.icon);
+    }
+    if (!entry.name.empty()) {
+      addIconAlias(m_appNames, entry.id, entry.name);
+      addIconAlias(m_appNames, execBasename(entry.exec), entry.name);
+      addIconAlias(m_appNames, entry.startupWmClass, entry.name);
     }
   }
   m_desktopEntriesVersion = desktopEntriesVersion();
@@ -1028,7 +1053,11 @@ std::string TrayWidget::resolveIconPath(const TrayItemInfo& item) {
   // When an explicit tray IconName is provided, treat it as authoritative.
   // Falling back to generic app-id/title mappings can hide stateful icon
   // changes (e.g. indicator on/off variants) behind a constant app icon.
-  const bool hasTargetPixmap = item.needsAttention ? !item.attentionArgb32.empty() : !item.iconArgb32.empty();
+  // XEmbed items are the exception: they never carry an icon name, only a
+  // window-icon pixmap, so a desktop-entry match (via StartupWMClass etc.)
+  // is the best theming available and the pixmap stays as fallback.
+  const bool hasTargetPixmap =
+      (item.needsAttention ? !item.attentionArgb32.empty() : !item.iconArgb32.empty()) && !tray::isXEmbedItem(item);
   if (preferred.empty() && !hasTargetPixmap) {
     candidates.emplace_back("itemName", &item.itemName);
     candidates.emplace_back("processName", &item.processName);

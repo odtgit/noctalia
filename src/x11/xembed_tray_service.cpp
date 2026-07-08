@@ -159,6 +159,7 @@ void XEmbedTrayService::start() {
   m_atomNetWmName = internAtom("_NET_WM_NAME");
   m_atomNetWmIcon = internAtom("_NET_WM_ICON");
   m_atomUtf8String = internAtom("UTF8_STRING");
+  m_atomWineHwndStyle = internAtom("_WINE_HWND_STYLE");
   if (m_atomTraySelection == XCB_NONE || m_atomTrayOpcode == XCB_NONE || m_atomManager == XCB_NONE) {
     teardown();
     return;
@@ -212,6 +213,55 @@ void XEmbedTrayService::start() {
   xcb_flush(m_conn);
 
   kLog.info("xembed tray host active on {} ({})", display, selectionName);
+
+  adoptOrphanedWineTrayWindows();
+}
+
+void XEmbedTrayService::adoptOrphanedWineTrayWindows() {
+  // Wine only docks a tray icon at creation time: when no tray manager owns
+  // the selection at that moment it maps a standalone tray-strip window on
+  // the desktop instead, and current Wine/Proton builds never react to a
+  // later MANAGER broadcast (winex11 only handles it on the desktop hwnd,
+  // which rootless setups don't deliver root broadcasts to). Those strips
+  // are what show up as tiny floating windows under Wayland compositors.
+  // They are unmistakable - direct root children, viewable, not
+  // override-redirect, Wine-owned (_WINE_HWND_STYLE), icon-bearing
+  // (_NET_WM_ICON) and tray-strip sized - so adopt them like a dock
+  // request. Wine treats clicks on the strip as tray icon clicks, which is
+  // exactly what our forwarded button events deliver.
+  const XcbReply<xcb_query_tree_reply_t> tree(xcb_query_tree_reply(m_conn, xcb_query_tree(m_conn, m_root), nullptr));
+  if (tree == nullptr) {
+    return;
+  }
+
+  auto hasProperty = [this](xcb_window_t window, xcb_atom_t property) {
+    const auto reply = getProperty(m_conn, window, property, XCB_ATOM_ANY, 0);
+    return reply != nullptr && reply->type != XCB_NONE;
+  };
+
+  const xcb_window_t* children = xcb_query_tree_children(tree.get());
+  for (int i = 0; i < xcb_query_tree_children_length(tree.get()); ++i) {
+    const xcb_window_t window = children[i];
+    const XcbReply<xcb_get_window_attributes_reply_t> attributes(
+        xcb_get_window_attributes_reply(m_conn, xcb_get_window_attributes(m_conn, window), nullptr)
+    );
+    if (attributes == nullptr
+        || attributes->map_state != XCB_MAP_STATE_VIEWABLE
+        || attributes->override_redirect != 0) {
+      continue;
+    }
+    if (!hasProperty(window, m_atomWineHwndStyle) || !hasProperty(window, m_atomNetWmIcon)) {
+      continue;
+    }
+    const XcbReply<xcb_get_geometry_reply_t> geometry(
+        xcb_get_geometry_reply(m_conn, xcb_get_geometry(m_conn, window), nullptr)
+    );
+    if (geometry == nullptr || geometry->height > 48 || geometry->width > 1024 || geometry->width < 8) {
+      continue;
+    }
+    kLog.info("adopting orphaned Wine tray window 0x{:x} ({}x{})", window, geometry->width, geometry->height);
+    dockIcon(window);
+  }
 }
 
 void XEmbedTrayService::teardown() {
@@ -258,29 +308,74 @@ xcb_window_t XEmbedTrayService::windowFromItemId(std::string_view itemId) const 
   return m_icons.contains(window) ? window : XCB_NONE;
 }
 
-bool XEmbedTrayService::activateItem(const std::string& itemId) {
+bool XEmbedTrayService::activateItem(
+    const std::string& itemId, std::int32_t x, std::int32_t y, wl_output* output, std::string_view barEdge
+) {
   const xcb_window_t window = windowFromItemId(itemId);
-  return window != XCB_NONE && sendClick(window, XCB_BUTTON_INDEX_1);
+  return window != XCB_NONE && sendClick(window, XCB_BUTTON_INDEX_1, mapClickToXRoot(x, y, output, barEdge));
 }
 
-bool XEmbedTrayService::openContextMenu(const std::string& itemId) {
+bool XEmbedTrayService::openContextMenu(
+    const std::string& itemId, std::int32_t x, std::int32_t y, wl_output* output, std::string_view barEdge
+) {
   const xcb_window_t window = windowFromItemId(itemId);
-  return window != XCB_NONE && sendClick(window, XCB_BUTTON_INDEX_3);
+  return window != XCB_NONE && sendClick(window, XCB_BUTTON_INDEX_3, mapClickToXRoot(x, y, output, barEdge));
 }
 
-bool XEmbedTrayService::sendClick(xcb_window_t window, std::uint8_t button) {
+std::optional<std::pair<std::int16_t, std::int16_t>>
+XEmbedTrayService::mapClickToXRoot(std::int32_t x, std::int32_t y, wl_output* output, std::string_view barEdge) const {
+  if (!m_outputResolver || output == nullptr) {
+    return std::nullopt;
+  }
+  const auto geometry = m_outputResolver(output);
+  if (!geometry.has_value() || geometry->logicalWidth <= 0 || geometry->logicalHeight <= 0) {
+    return std::nullopt;
+  }
+
+  // The click coordinates are local to the bar surface, which spans its
+  // output along the bar edge. Along the bar they track the output; across
+  // the bar they are only a few pixels, so snap the cross-axis to the edge
+  // the bar sits on. The result only anchors context menus, so edge-of-bar
+  // precision is enough.
+  double lx = std::clamp<double>(x, 0.0, geometry->logicalWidth - 1);
+  double ly = std::clamp<double>(y, 0.0, geometry->logicalHeight - 1);
+  if (barEdge == "bottom") {
+    ly = geometry->logicalHeight - 1;
+  } else if (barEdge == "right") {
+    lx = geometry->logicalWidth - 1;
+  }
+
+  const double rootX = geometry->logicalX + lx * geometry->scale;
+  const double rootY = geometry->logicalY + ly * geometry->scale;
+  auto toInt16 = [](double value) {
+    return static_cast<std::int16_t>(std::clamp<double>(value, INT16_MIN, INT16_MAX));
+  };
+  return std::pair{toInt16(rootX), toInt16(rootY)};
+}
+
+bool XEmbedTrayService::sendClick(
+    xcb_window_t window, std::uint8_t button, std::optional<std::pair<std::int16_t, std::int16_t>> rootPos
+) {
   if (!active()) {
     return false;
   }
 
   std::int16_t rootX = 0;
   std::int16_t rootY = 0;
-  const XcbReply<xcb_query_pointer_reply_t> pointer(
-      xcb_query_pointer_reply(m_conn, xcb_query_pointer(m_conn, m_root), nullptr)
-  );
-  if (pointer != nullptr) {
-    rootX = pointer->root_x;
-    rootY = pointer->root_y;
+  if (rootPos.has_value()) {
+    rootX = rootPos->first;
+    rootY = rootPos->second;
+  } else {
+    // Without a mapped click position, fall back to wherever the X pointer
+    // last was. Wine-style clients update their cursor belief from the
+    // event's root coordinates and pop context menus there.
+    const XcbReply<xcb_query_pointer_reply_t> pointer(
+        xcb_query_pointer_reply(m_conn, xcb_query_pointer(m_conn, m_root), nullptr)
+    );
+    if (pointer != nullptr) {
+      rootX = pointer->root_x;
+      rootY = pointer->root_y;
+    }
   }
 
   xcb_button_press_event_t press{};
