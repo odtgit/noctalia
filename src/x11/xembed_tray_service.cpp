@@ -278,12 +278,17 @@ bool XEmbedTrayService::looksLikeWineTrayStrip(xcb_window_t window) const {
 
 void XEmbedTrayService::teardown() {
   if (m_conn != nullptr) {
-    // Let the host window die with the connection, destroying docked icon
-    // windows with it. That DestroyNotify is the signal XEmbed clients (Wine
-    // in particular) key their recovery on: they recreate the icon and dock
-    // to whichever tray owns the selection next. Politely reparenting icons
-    // back to root instead leaves clients believing they are still embedded,
-    // and they then ignore the next MANAGER broadcast.
+    // Hand docked icons back to the root window (the systray spec's shutdown
+    // handover) instead of letting them die with the host. Wine reacts to
+    // the ReparentNotify by closing the embedded icon and recreating it as a
+    // standalone tray strip, which the next host adopts on sight; letting
+    // the windows be destroyed instead makes Wine drop the app's icon
+    // registration silently, leaving no icon to recover until the app
+    // re-registers it itself.
+    for (const auto& [window, _] : m_icons) {
+      xcb_reparent_window(m_conn, window, m_root, 0, 0);
+    }
+    xcb_flush(m_conn);
     xcb_disconnect(m_conn);
     m_conn = nullptr;
   }
