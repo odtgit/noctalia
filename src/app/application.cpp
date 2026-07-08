@@ -92,6 +92,7 @@
 #include "ui/style.h"
 #include "util/file_utils.h"
 #include "util/string_utils.h"
+#include "x11/xembed_tray_service.h"
 
 #include <algorithm>
 #include <chrono>

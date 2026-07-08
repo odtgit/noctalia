@@ -10,6 +10,7 @@
 #include <vector>
 
 class SessionBus;
+class XEmbedTrayService;
 
 struct TrayItemInfo {
   std::string id;
@@ -67,6 +68,9 @@ public:
   TrayService& operator=(const TrayService&) = delete;
 
   void start();
+  // Optional legacy XEmbed icon source; its items are merged into items() and
+  // "xembed:" item ids are routed back to it for activation/context menus.
+  void setXEmbedSource(XEmbedTrayService* xembed);
   void setChangeCallback(ChangeCallback callback);
   void setMenuToggleCallback(MenuToggleCallback callback);
   void requestMenuToggle(const std::string& itemId, float contentScale = 1.0F) const;
@@ -146,6 +150,7 @@ private:
   [[nodiscard]] static std::string canonicalItemId(const std::string& busName, const std::string& objectPath);
 
   SessionBus& m_bus;
+  XEmbedTrayService* m_xembed = nullptr;
   enum class WatcherRole { Owner, Client };
   WatcherRole m_watcherRole = WatcherRole::Owner;
   std::string m_hostBusName;

@@ -136,6 +136,7 @@ class SystemBusPollSource;
 class SystemMonitorService;
 class TrayService;
 class UPowerService;
+class XEmbedTrayService;
 enum class BluetoothStateChangeOrigin : std::uint8_t;
 enum class NetworkChangeOrigin : std::uint8_t;
 enum class PowerProfilesChangeOrigin : std::uint8_t;
@@ -288,6 +289,7 @@ private:
   std::unique_ptr<BrightnessService> m_brightnessService;
   std::unique_ptr<KeyboardBacklightService> m_keyboardBacklightService;
   std::unique_ptr<TrayService> m_trayService;
+  std::unique_ptr<XEmbedTrayService> m_xembedTrayService;
   std::unique_ptr<NotificationDBusHost> m_notificationDbus;
   std::unique_ptr<sdbus::IProxy> m_notificationBusNameWatchProxy;
   bool m_notificationBusNameWatchInstalled = false;

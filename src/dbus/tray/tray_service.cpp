@@ -5,6 +5,7 @@
 #include "core/timer_manager.h"
 #include "dbus/session_bus.h"
 #include "util/string_utils.h"
+#include "x11/xembed_tray_service.h"
 
 #include <algorithm>
 #include <array>
@@ -805,13 +806,22 @@ void TrayService::requestMenuToggle(const std::string& itemId, float contentScal
   }
 }
 
-std::size_t TrayService::itemCount() const noexcept { return m_items.size(); }
+std::size_t TrayService::itemCount() const noexcept {
+  return m_items.size() + (m_xembed != nullptr ? m_xembed->itemCount() : 0);
+}
+
+void TrayService::setXEmbedSource(XEmbedTrayService* xembed) { m_xembed = xembed; }
 
 std::vector<TrayItemInfo> TrayService::items() const {
   std::vector<TrayItemInfo> out;
-  out.reserve(m_items.size());
+  out.reserve(itemCount());
   for (const auto& [_, item] : m_items) {
     out.push_back(item);
+  }
+  if (m_xembed != nullptr) {
+    for (auto& item : m_xembed->items()) {
+      out.push_back(std::move(item));
+    }
   }
   std::ranges::sort(out, {}, &TrayItemInfo::id);
   return out;
@@ -1394,15 +1404,25 @@ bool TrayService::activateMenuEntry(const std::string& itemId, std::int32_t entr
 
 std::vector<std::string> TrayService::registeredItems() const {
   std::vector<std::string> items;
-  items.reserve(m_items.size());
+  items.reserve(itemCount());
   for (const auto& [id, _] : m_items) {
     items.push_back(id);
+  }
+  if (m_xembed != nullptr) {
+    for (const auto& item : m_xembed->items()) {
+      items.push_back(item.id);
+    }
   }
   std::ranges::sort(items);
   return items;
 }
 
 bool TrayService::activateItem(const std::string& itemId, std::int32_t x, std::int32_t y) {
+  if (m_xembed != nullptr && XEmbedTrayService::isXEmbedItemId(itemId)) {
+    (void)x;
+    (void)y;
+    return m_xembed->activateItem(itemId);
+  }
   if (!ensureItemProxy(itemId)) {
     return false;
   }
@@ -1429,6 +1449,11 @@ bool TrayService::activateItem(const std::string& itemId, std::int32_t x, std::i
 }
 
 bool TrayService::openContextMenu(const std::string& itemId, std::int32_t x, std::int32_t y) {
+  if (m_xembed != nullptr && XEmbedTrayService::isXEmbedItemId(itemId)) {
+    (void)x;
+    (void)y;
+    return m_xembed->openContextMenu(itemId);
+  }
   if (!ensureItemProxy(itemId)) {
     return false;
   }

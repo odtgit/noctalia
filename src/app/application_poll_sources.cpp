@@ -9,6 +9,7 @@
 #include "pipewire/pipewire_spectrum_poll_source.h"
 #include "pipewire/wireplumber_mixer.h"
 #include "system/brightness_poll_source.h"
+#include "x11/xembed_tray_service.h"
 
 std::vector<PollSource*> Application::currentPollSources() {
   std::vector<PollSource*> sources;
@@ -54,6 +55,9 @@ std::vector<PollSource*> Application::currentPollSources() {
   }
   if (m_brightnessPollSource != nullptr) {
     sources.push_back(m_brightnessPollSource.get());
+  }
+  if (m_xembedTrayService != nullptr) {
+    sources.push_back(m_xembedTrayService.get());
   }
   sources.push_back(&m_fileWatchPollSource);
   sources.push_back(&m_ipcPollSource);
