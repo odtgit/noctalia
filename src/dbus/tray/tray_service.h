@@ -11,6 +11,7 @@
 
 class SessionBus;
 class XEmbedTrayService;
+struct wl_output;
 
 struct TrayItemInfo {
   std::string id;
@@ -90,8 +91,16 @@ public:
   void notifyMenuOpened(const std::string& itemId, std::int32_t entryId = 0);
   void notifyMenuClosed(const std::string& itemId, std::int32_t entryId = 0);
   [[nodiscard]] std::vector<std::string> registeredItems() const;
-  [[nodiscard]] bool activateItem(const std::string& itemId, std::int32_t x = 0, std::int32_t y = 0);
-  [[nodiscard]] bool openContextMenu(const std::string& itemId, std::int32_t x = 0, std::int32_t y = 0);
+  // output/barEdge are optional placement hints consumed by the XEmbed path
+  // (SNI items receive only x/y, matching the StatusNotifierItem methods).
+  [[nodiscard]] bool activateItem(
+      const std::string& itemId, std::int32_t x = 0, std::int32_t y = 0, wl_output* output = nullptr,
+      const std::string& barEdge = {}
+  );
+  [[nodiscard]] bool openContextMenu(
+      const std::string& itemId, std::int32_t x = 0, std::int32_t y = 0, wl_output* output = nullptr,
+      const std::string& barEdge = {}
+  );
 
 private:
   struct MenuCache {

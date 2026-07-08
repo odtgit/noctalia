@@ -1532,6 +1532,28 @@ void Application::initSessionBusServices() {
       m_bar.refresh();
       m_trayMenu.onTrayChanged();
     });
+    m_xembedTrayService->setOutputGeometryResolver(
+        [this](wl_output* output) -> std::optional<XEmbedTrayService::OutputGeometry> {
+          const WaylandOutput* info = m_wayland.findOutputByWl(output);
+          if (info == nullptr) {
+            return std::nullopt;
+          }
+          const std::int32_t logicalWidth = info->effectiveLogicalWidth();
+          const std::int32_t logicalHeight = info->effectiveLogicalHeight();
+          if (logicalWidth <= 0 || logicalHeight <= 0) {
+            return std::nullopt;
+          }
+          const double scale =
+              info->width > 0 ? static_cast<double>(info->width) / logicalWidth : static_cast<double>(info->scale);
+          return XEmbedTrayService::OutputGeometry{
+              .logicalX = info->logicalX,
+              .logicalY = info->logicalY,
+              .logicalWidth = logicalWidth,
+              .logicalHeight = logicalHeight,
+              .scale = scale,
+          };
+        }
+    );
     m_trayService->setXEmbedSource(m_xembedTrayService.get());
   }
 

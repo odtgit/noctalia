@@ -1417,11 +1417,11 @@ std::vector<std::string> TrayService::registeredItems() const {
   return items;
 }
 
-bool TrayService::activateItem(const std::string& itemId, std::int32_t x, std::int32_t y) {
+bool TrayService::activateItem(
+    const std::string& itemId, std::int32_t x, std::int32_t y, wl_output* output, const std::string& barEdge
+) {
   if (m_xembed != nullptr && XEmbedTrayService::isXEmbedItemId(itemId)) {
-    (void)x;
-    (void)y;
-    return m_xembed->activateItem(itemId);
+    return m_xembed->activateItem(itemId, x, y, output, barEdge);
   }
   if (!ensureItemProxy(itemId)) {
     return false;
@@ -1448,11 +1448,11 @@ bool TrayService::activateItem(const std::string& itemId, std::int32_t x, std::i
   }
 }
 
-bool TrayService::openContextMenu(const std::string& itemId, std::int32_t x, std::int32_t y) {
+bool TrayService::openContextMenu(
+    const std::string& itemId, std::int32_t x, std::int32_t y, wl_output* output, const std::string& barEdge
+) {
   if (m_xembed != nullptr && XEmbedTrayService::isXEmbedItemId(itemId)) {
-    (void)x;
-    (void)y;
-    return m_xembed->openContextMenu(itemId);
+    return m_xembed->openContextMenu(itemId, x, y, output, barEdge);
   }
   if (!ensureItemProxy(itemId)) {
     return false;

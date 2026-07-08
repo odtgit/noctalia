@@ -11,6 +11,9 @@
 
 namespace tray {
 
+  // Items sourced from the XEmbed tray host rather than StatusNotifierItem.
+  inline bool isXEmbedItem(const TrayItemInfo& item) { return item.id.starts_with("xembed:"); }
+
   inline bool isUniqueBusName(std::string_view value) { return !value.empty() && value.front() == ':'; }
 
   inline bool isPassiveStatus(const TrayItemInfo& item) { return StringUtils::toLower(item.status) == "passive"; }

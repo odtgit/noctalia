@@ -14,6 +14,8 @@
 #include <unordered_map>
 #include <vector>
 
+struct wl_output;
+
 class ConfigService;
 class Flex;
 class Image;
@@ -30,6 +32,9 @@ public:
     bool drawerMode = false;
     std::function<void()> itemActivated;
     std::string barPosition = "top";
+    // Output hosting the widget's surface; forwarded with clicks so legacy
+    // XEmbed items can anchor their client-drawn context menus near the tray.
+    wl_output* output = nullptr;
     bool panelGridMode = false;
     std::size_t panelGridColumns = 3;
     float inlineEntryGap = Style::spaceXs;
@@ -79,6 +84,7 @@ private:
   Flex* m_container = nullptr;
   IconResolver m_iconResolver;
   std::unordered_map<std::string, std::string> m_appIcons;
+  std::unordered_map<std::string, std::string> m_appNames;
   std::unordered_map<std::string, std::string> m_preferredIconPaths;
   std::unordered_map<std::string, std::unordered_map<std::string, std::string>> m_trayThemePathIcons;
   std::uint64_t m_desktopEntriesVersion = 0;
@@ -96,6 +102,7 @@ private:
   bool m_drawerMode = false;
   std::function<void()> m_itemActivated;
   std::string m_barPosition;
+  wl_output* m_output = nullptr;
   bool m_panelGridMode = false;
   std::size_t m_panelGridColumns = 3;
   float m_inlineEntryGap = Style::spaceXs;
