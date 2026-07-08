@@ -893,6 +893,27 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
       .prewarmBlur = true,
   };
 
+  // Record where the surface lands in output-local coordinates so panel
+  // content can translate its own points to the output (e.g. tray click
+  // forwarding). Unanchored axes are centered by the compositor.
+  {
+    const auto surfaceW = static_cast<std::int32_t>(requestedSurfaceWidth);
+    const auto surfaceH = static_cast<std::int32_t>(requestedSurfaceHeight);
+    std::int32_t originX = (outputWidth - surfaceW) / 2;
+    std::int32_t originY = (outputHeight - surfaceH) / 2;
+    if ((standaloneAnchor & LayerShellAnchor::Left) != 0) {
+      originX = standaloneMarginLeft;
+    } else if ((standaloneAnchor & LayerShellAnchor::Right) != 0) {
+      originX = outputWidth - surfaceW - standaloneMarginRight;
+    }
+    if ((standaloneAnchor & LayerShellAnchor::Top) != 0) {
+      originY = standaloneMarginTop;
+    } else if ((standaloneAnchor & LayerShellAnchor::Bottom) != 0) {
+      originY = outputHeight - surfaceH - standaloneMarginBottom;
+    }
+    m_panelSurfaceOrigin = std::pair{originX, originY};
+  }
+
   const auto configureSurfaceCallbacks = [this](Surface& surface) {
     surface.setRenderContext(m_renderContext);
     surface.setConfigureCallback([this](std::uint32_t /*width*/, std::uint32_t /*height*/) {
@@ -918,6 +939,7 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
     m_layerSurface = nullptr;
     m_output = nullptr;
     m_openAnchor.reset();
+    m_panelSurfaceOrigin.reset();
     m_wlSurface = nullptr;
     m_panelLayer = LayerShellLayer::Top;
     m_activePanel = nullptr;
@@ -1039,6 +1061,7 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
 
     m_panelInsetX = visualX - surfaceX;
     m_panelInsetY = visualY - surfaceY;
+    m_panelSurfaceOrigin = std::pair{surfaceX, surfaceY};
     m_panelVisualWidth = panelWidth;
     m_panelVisualHeight = panelHeight;
     m_attachedBackgroundOpacity = m_activePanel->inheritsBarBackgroundOpacity()
@@ -1421,6 +1444,7 @@ void PanelManager::destroyPanel() {
   m_layerSurface = nullptr;
   m_output = nullptr;
   m_openAnchor.reset();
+  m_panelSurfaceOrigin.reset();
   m_wlSurface = nullptr;
   m_activePanel = nullptr;
   m_activePanelId.clear();
@@ -1642,6 +1666,15 @@ bool PanelManager::isAttachedOpen() const noexcept { return isOpen() && m_attach
 wl_output* PanelManager::attachedPanelOutput() const noexcept { return m_output; }
 
 std::optional<std::pair<float, float>> PanelManager::activePanelAnchor() const noexcept { return m_openAnchor; }
+
+std::optional<std::pair<float, float>> PanelManager::activePanelPointToOutput(float x, float y) const noexcept {
+  if (m_panelSurfaceOrigin.has_value()) {
+    return std::pair{
+        static_cast<float>(m_panelSurfaceOrigin->first) + x, static_cast<float>(m_panelSurfaceOrigin->second) + y
+    };
+  }
+  return m_openAnchor;
+}
 
 std::string_view PanelManager::attachedSourceBarName() const noexcept { return m_sourceBarName; }
 

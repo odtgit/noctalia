@@ -169,7 +169,7 @@ TrayWidget::TrayWidget(ConfigService& config, TrayService* tray, Options options
       m_pinnedItems(std::move(options.pinnedItems)), m_hidePassive(options.hidePassive),
       m_drawerMode(options.drawerMode), m_itemActivated(std::move(options.itemActivated)),
       m_barPosition(std::move(options.barPosition)), m_output(options.output),
-      m_clickPositionOverride(options.clickPositionOverride),
+      m_clickToOutputMapper(std::move(options.clickToOutputMapper)),
       m_panelGridMode(options.panelGridMode),
       m_panelGridColumns(std::clamp<std::size_t>(options.panelGridColumns, 1U, 5U)),
       m_inlineEntryGap(std::max(0.0F, options.inlineEntryGap)), m_matchAdjacentSpacing(options.matchAdjacentSpacing),
@@ -783,9 +783,12 @@ void TrayWidget::rebuild(Renderer& renderer) {
         return;
       }
       auto [x, y] = trayPointerCoords(*areaPtr, data);
-      if (m_clickPositionOverride.has_value()) {
-        x = static_cast<std::int32_t>(std::lround(m_clickPositionOverride->first));
-        y = static_cast<std::int32_t>(std::lround(m_clickPositionOverride->second));
+      if (m_clickToOutputMapper) {
+        if (const auto mapped = m_clickToOutputMapper(static_cast<float>(x), static_cast<float>(y));
+            mapped.has_value()) {
+          x = static_cast<std::int32_t>(std::lround(mapped->first));
+          y = static_cast<std::int32_t>(std::lround(mapped->second));
+        }
       }
       if (data.button == BTN_LEFT) {
         (void)m_tray->activateItem(itemId, x, y, m_output, m_barPosition);

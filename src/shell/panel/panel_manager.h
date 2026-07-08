@@ -116,6 +116,10 @@ public:
   // Anchor position the active panel was opened at (output-local logical
   // coordinates from the triggering bar widget), if one was provided.
   [[nodiscard]] std::optional<std::pair<float, float>> activePanelAnchor() const noexcept;
+  // Translate a point on the active panel's surface into output-local
+  // coordinates using the surface origin computed at open time, falling back
+  // to the open anchor when the origin is unknown.
+  [[nodiscard]] std::optional<std::pair<float, float>> activePanelPointToOutput(float x, float y) const noexcept;
   // Bar that opened the active panel; empty when none was recorded.
   [[nodiscard]] std::string_view attachedSourceBarName() const noexcept;
   [[nodiscard]] const std::string& activePanelId() const noexcept;
@@ -249,6 +253,7 @@ private:
 
   wl_output* m_output = nullptr;
   std::optional<std::pair<float, float>> m_openAnchor;
+  std::optional<std::pair<std::int32_t, std::int32_t>> m_panelSurfaceOrigin;
   wl_surface* m_wlSurface = nullptr;
   float m_contentWidth = 0.0F;
   float m_contentHeight = 0.0F;
