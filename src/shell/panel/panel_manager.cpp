@@ -978,6 +978,7 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
     m_surface.reset();
     m_layerSurface = nullptr;
     m_output = nullptr;
+    m_openAnchor.reset();
     m_wlSurface = nullptr;
     m_panelLayer = LayerShellLayer::Top;
     m_activePanel = nullptr;
@@ -1245,6 +1246,8 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
 
     if (ok) {
       m_output = request.output;
+      m_openAnchor =
+          request.hasAnchorPosition ? std::optional{std::pair{request.anchorX, request.anchorY}} : std::nullopt;
       m_wlSurface = m_surface->wlSurface();
       m_surface->setInputRegion(
           {InputRect{m_panelInsetX, m_panelInsetY, static_cast<int>(panelWidth), static_cast<int>(panelHeight)}}
@@ -1341,6 +1344,7 @@ void PanelManager::openPanel(const std::string& panelId, PanelOpenRequest reques
   }
 
   m_output = request.output;
+  m_openAnchor = request.hasAnchorPosition ? std::optional{std::pair{request.anchorX, request.anchorY}} : std::nullopt;
   m_wlSurface = m_surface->wlSurface();
   m_surface->setInputRegion(
       {InputRect{m_panelInsetX, m_panelInsetY, static_cast<int>(panelWidth), static_cast<int>(panelHeight)}}
@@ -1666,6 +1670,7 @@ void PanelManager::destroyPanel() {
   m_surface.reset();
   m_layerSurface = nullptr;
   m_output = nullptr;
+  m_openAnchor.reset();
   m_wlSurface = nullptr;
   m_activePanel = nullptr;
   m_activePanelId.clear();
@@ -1910,6 +1915,8 @@ bool PanelManager::isPanelTransitionActive() const noexcept {
 bool PanelManager::isAttachedOpen() const noexcept { return isOpen() && m_attachedToBar; }
 
 wl_output* PanelManager::attachedPanelOutput() const noexcept { return m_output; }
+
+std::optional<std::pair<float, float>> PanelManager::activePanelAnchor() const noexcept { return m_openAnchor; }
 
 std::string_view PanelManager::attachedSourceBarName() const noexcept { return m_sourceBarName; }
 
