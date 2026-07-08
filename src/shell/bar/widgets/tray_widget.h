@@ -12,6 +12,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 struct wl_output;
@@ -35,6 +36,11 @@ public:
     // Output hosting the widget's surface; forwarded with clicks so legacy
     // XEmbed items can anchor their client-drawn context menus near the tray.
     wl_output* output = nullptr;
+    // Output-local position to report for clicks instead of the widget's own
+    // surface coordinates. Panel-hosted instances (tray drawer) set this to
+    // the panel's open anchor, since their surface coordinates are local to
+    // the panel, not the output.
+    std::optional<std::pair<float, float>> clickPositionOverride;
     bool panelGridMode = false;
     std::size_t panelGridColumns = 3;
     float inlineEntryGap = Style::spaceXs;
@@ -103,6 +109,7 @@ private:
   std::function<void()> m_itemActivated;
   std::string m_barPosition;
   wl_output* m_output = nullptr;
+  std::optional<std::pair<float, float>> m_clickPositionOverride;
   bool m_panelGridMode = false;
   std::size_t m_panelGridColumns = 3;
   float m_inlineEntryGap = Style::spaceXs;

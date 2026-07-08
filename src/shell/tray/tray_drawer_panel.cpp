@@ -90,6 +90,7 @@ void TrayDrawerPanel::create() {
   options.drawerMode = false;
   options.itemActivated = []() { PanelManager::instance().close(); };
   options.output = PanelManager::instance().attachedPanelOutput();
+  options.clickPositionOverride = PanelManager::instance().activePanelAnchor();
   options.panelGridMode = true;
   options.customItemSize = resolved.drawerItemSize;
   m_drawerWidget = std::make_unique<TrayWidget>(*m_config, m_tray, std::move(options));

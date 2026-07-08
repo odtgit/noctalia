@@ -16,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 
 class ConfigService;
 class CompositorPlatform;
@@ -112,6 +113,9 @@ public:
   [[nodiscard]] bool isAttachedOpen() const noexcept;
   // Output the active panel is on; null when none is open.
   [[nodiscard]] wl_output* attachedPanelOutput() const noexcept;
+  // Anchor position the active panel was opened at (output-local logical
+  // coordinates from the triggering bar widget), if one was provided.
+  [[nodiscard]] std::optional<std::pair<float, float>> activePanelAnchor() const noexcept;
   // Bar that opened the active panel; empty when none was recorded.
   [[nodiscard]] std::string_view attachedSourceBarName() const noexcept;
   [[nodiscard]] const std::string& activePanelId() const noexcept;
@@ -244,6 +248,7 @@ private:
   std::string m_pendingOpenContext;
 
   wl_output* m_output = nullptr;
+  std::optional<std::pair<float, float>> m_openAnchor;
   wl_surface* m_wlSurface = nullptr;
   float m_contentWidth = 0.0F;
   float m_contentHeight = 0.0F;
