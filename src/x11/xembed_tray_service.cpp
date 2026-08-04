@@ -301,6 +301,87 @@ void XEmbedTrayService::teardown() {
   }
 }
 
+void XEmbedTrayService::maybeCaptureMenuWindow(const xcb_map_notify_event_t& event) {
+  if (!m_pendingMenuClick.has_value()) {
+    return;
+  }
+  if (std::chrono::steady_clock::now() >= m_pendingMenuClick->deadline) {
+    m_pendingMenuClick.reset();
+    return;
+  }
+  // Context menus are override-redirect root children of plausible menu size;
+  // this screens out the 1x1 grab helpers Wine maps alongside them.
+  if (event.window == m_host || m_icons.contains(event.window) || event.override_redirect == 0) {
+    return;
+  }
+  const XcbReply<xcb_get_geometry_reply_t> geometry(
+      xcb_get_geometry_reply(m_conn, xcb_get_geometry(m_conn, event.window), nullptr)
+  );
+  if (geometry == nullptr || geometry->width < 40 || geometry->height < 20) {
+    return;
+  }
+
+  std::string title = propertyString(m_conn, event.window, m_atomNetWmName, m_atomUtf8String);
+  if (title.empty()) {
+    title = propertyString(m_conn, event.window, XCB_ATOM_WM_NAME, XCB_ATOM_ANY);
+  }
+  if (title.empty()) {
+    // No name to find the compositor-side window by; leave it where it is.
+    m_pendingMenuClick.reset();
+    return;
+  }
+
+  kLog.debug("xembed menu window 0x{:x} '{}' mapped, requesting placement", event.window, title);
+  m_pendingMenuPlacement = PendingMenuPlacement{
+      .title = std::move(title),
+      .output = m_pendingMenuClick->output,
+      .x = m_pendingMenuClick->x,
+      .y = m_pendingMenuClick->y,
+      .barEdge = m_pendingMenuClick->barEdge,
+      .width = geometry->width,
+      .height = geometry->height,
+      .deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(1500),
+      .nextAttempt = std::chrono::steady_clock::now(),
+  };
+  m_pendingMenuClick.reset();
+  attemptMenuPlacement();
+}
+
+void XEmbedTrayService::attemptMenuPlacement() {
+  if (!m_pendingMenuPlacement.has_value()) {
+    return;
+  }
+  auto& pending = *m_pendingMenuPlacement;
+  const auto now = std::chrono::steady_clock::now();
+  if (now < pending.nextAttempt) {
+    return;
+  }
+
+  bool done = now >= pending.deadline || !m_menuPlaceCallback || !m_outputResolver;
+  if (!done) {
+    const auto geometry = m_outputResolver(pending.output);
+    if (!geometry.has_value() || geometry->scale <= 0 || geometry->logicalWidth <= 0 || geometry->logicalHeight <= 0) {
+      done = true;
+    } else {
+      // Place the menu's top-left at the click, pulled back so the whole menu
+      // stays on the output (which also flips it to open inward from
+      // bottom/right bar edges).
+      const auto [lx, ly] = clickToOutputLocal(pending.x, pending.y, *geometry, pending.barEdge);
+      const double menuWidth = pending.width / geometry->scale;
+      const double menuHeight = pending.height / geometry->scale;
+      const double targetX = std::clamp(lx, 0.0, std::max(0.0, geometry->logicalWidth - menuWidth));
+      const double targetY = std::clamp(ly, 0.0, std::max(0.0, geometry->logicalHeight - menuHeight));
+      done = m_menuPlaceCallback(pending.title, targetX, targetY);
+    }
+  }
+
+  if (done) {
+    m_pendingMenuPlacement.reset();
+  } else {
+    pending.nextAttempt = now + std::chrono::milliseconds(100);
+  }
+}
+
 void XEmbedTrayService::emitChanged() {
   if (m_changeCallback) {
     m_changeCallback();
@@ -336,7 +417,44 @@ bool XEmbedTrayService::openContextMenu(
     const std::string& itemId, std::int32_t x, std::int32_t y, wl_output* output, std::string_view barEdge
 ) {
   const xcb_window_t window = windowFromItemId(itemId);
-  return window != XCB_NONE && sendClick(window, XCB_BUTTON_INDEX_3, mapClickToXRoot(x, y, output, barEdge));
+  if (window == XCB_NONE) {
+    return false;
+  }
+  const auto rootPos = mapClickToXRoot(x, y, output, barEdge);
+  if (!sendClick(window, XCB_BUTTON_INDEX_3, rootPos)) {
+    return false;
+  }
+  // The client draws its own menu window in response; watch for it mapping so
+  // the compositor-placed toplevel can be moved to the click position.
+  if (rootPos.has_value() && m_menuPlaceCallback) {
+    m_pendingMenuClick = PendingMenuClick{
+        .output = output,
+        .x = x,
+        .y = y,
+        .barEdge = std::string(barEdge),
+        .deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2),
+    };
+    m_pendingMenuPlacement.reset();
+  }
+  return true;
+}
+
+// The click coordinates are local to the bar surface, which spans its
+// output along the bar edge. Along the bar they track the output; across
+// the bar they are only a few pixels, so snap the cross-axis to the edge
+// the bar sits on. The result only anchors context menus, so edge-of-bar
+// precision is enough.
+std::pair<double, double> XEmbedTrayService::clickToOutputLocal(
+    std::int32_t x, std::int32_t y, const OutputGeometry& geometry, std::string_view barEdge
+) {
+  double lx = std::clamp<double>(x, 0.0, geometry.logicalWidth - 1);
+  double ly = std::clamp<double>(y, 0.0, geometry.logicalHeight - 1);
+  if (barEdge == "bottom") {
+    ly = geometry.logicalHeight - 1;
+  } else if (barEdge == "right") {
+    lx = geometry.logicalWidth - 1;
+  }
+  return {lx, ly};
 }
 
 std::optional<std::pair<std::int16_t, std::int16_t>>
@@ -349,19 +467,7 @@ XEmbedTrayService::mapClickToXRoot(std::int32_t x, std::int32_t y, wl_output* ou
     return std::nullopt;
   }
 
-  // The click coordinates are local to the bar surface, which spans its
-  // output along the bar edge. Along the bar they track the output; across
-  // the bar they are only a few pixels, so snap the cross-axis to the edge
-  // the bar sits on. The result only anchors context menus, so edge-of-bar
-  // precision is enough.
-  double lx = std::clamp<double>(x, 0.0, geometry->logicalWidth - 1);
-  double ly = std::clamp<double>(y, 0.0, geometry->logicalHeight - 1);
-  if (barEdge == "bottom") {
-    ly = geometry->logicalHeight - 1;
-  } else if (barEdge == "right") {
-    lx = geometry->logicalWidth - 1;
-  }
-
+  const auto [lx, ly] = clickToOutputLocal(x, y, *geometry, barEdge);
   const double rootX = geometry->logicalX + lx * geometry->scale;
   const double rootY = geometry->logicalY + ly * geometry->scale;
   auto toInt16 = [](double value) {
@@ -449,6 +555,11 @@ bool XEmbedTrayService::sendClick(
 }
 
 int XEmbedTrayService::pollTimeoutMs() const {
+  if (m_pendingMenuPlacement.has_value()) {
+    // Menu placement retries on a short cadence until the compositor lists
+    // the freshly mapped window.
+    return 50;
+  }
   if (!m_startRequested || active()) {
     return -1;
   }
@@ -477,6 +588,7 @@ void XEmbedTrayService::dispatch(const std::vector<pollfd>& fds, std::size_t sta
     return;
   }
   processEvents();
+  attemptMenuPlacement();
 }
 
 void XEmbedTrayService::processEvents() {
@@ -506,6 +618,8 @@ void XEmbedTrayService::processEvents() {
       const auto& map = *reinterpret_cast<const xcb_map_notify_event_t*>(event.get());
       if (map.event == m_root && looksLikeWineTrayStrip(map.window)) {
         dockIcon(map.window);
+      } else if (map.event == m_root) {
+        maybeCaptureMenuWindow(map);
       }
       break;
     }

@@ -2,6 +2,7 @@
 #include "application.h"
 #include "application_internal.h"
 #include "compositors/compositor_detect.h"
+#include "compositors/niri/niri_runtime.h"
 #include "config/config_export.h"
 #include "config/config_types.h"
 #include "core/build_info.h"
@@ -1554,6 +1555,37 @@ void Application::initSessionBusServices() {
           };
         }
     );
+    // Wine-style clients draw their tray context menu in a client window.
+    // xwayland-satellite can only surface it as a parentless floating
+    // toplevel, which niri places at the center of the focused workspace, so
+    // fish the freshly mapped menu out of the window list by title and move
+    // it to the click position (view-local logical coordinates).
+    m_xembedTrayService->setMenuPlaceCallback([this](const std::string& title, double x, double y) -> bool {
+      const auto& runtime = m_compositorPlatform.niriRuntime();
+      if (!runtime.available()) {
+        return true;
+      }
+      const auto reply = runtime.requestJson("\"Windows\"\n");
+      if (!reply.has_value() || !reply->is_object() || !reply->contains("Ok") || !(*reply)["Ok"].contains("Windows")) {
+        return true;
+      }
+      std::int64_t menuWindowId = -1;
+      for (const auto& window : (*reply)["Ok"]["Windows"]) {
+        if (window.value("is_floating", false) && window.value("title", std::string{}) == title) {
+          // Newest matching window: ids are monotonic, and an older floating
+          // window with the same title (e.g. the app's main window floated by
+          // the user) must not be yanked to the tray.
+          menuWindowId = std::max(menuWindowId, window.value("id", std::int64_t{-1}));
+        }
+      }
+      if (menuWindowId < 0) {
+        return false;
+      }
+      (void)runtime.requestAction(
+          {{"MoveFloatingWindow", {{"id", menuWindowId}, {"x", {{"SetFixed", x}}}, {"y", {{"SetFixed", y}}}}}}
+      );
+      return true;
+    });
     m_trayService->setXEmbedSource(m_xembedTrayService.get());
   }
 

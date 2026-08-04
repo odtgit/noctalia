@@ -43,6 +43,15 @@ public:
   };
   using OutputGeometryResolver = std::function<std::optional<OutputGeometry>(wl_output*)>;
 
+  // Invoked after a forwarded context-menu click once the client maps its
+  // menu window. Under xwayland-satellite that window surfaces as a
+  // parentless floating toplevel that the compositor places on its own
+  // (niri centers it), so the shell gets a chance to move it to the click
+  // position: title is the menu window's name, x/y the desired output-local
+  // logical position of its top-left corner. Return false to be retried
+  // (compositor may not list the window yet), true when handled or hopeless.
+  using MenuPlaceCallback = std::function<bool(const std::string& title, double x, double y)>;
+
   XEmbedTrayService() = default;
   ~XEmbedTrayService() override;
   XEmbedTrayService(const XEmbedTrayService&) = delete;
@@ -54,6 +63,7 @@ public:
   [[nodiscard]] bool active() const noexcept { return m_conn != nullptr && m_selectionOwned; }
   void setChangeCallback(ChangeCallback callback) { m_changeCallback = std::move(callback); }
   void setOutputGeometryResolver(OutputGeometryResolver resolver) { m_outputResolver = std::move(resolver); }
+  void setMenuPlaceCallback(MenuPlaceCallback callback) { m_menuPlaceCallback = std::move(callback); }
 
   [[nodiscard]] static bool isXEmbedItemId(std::string_view itemId) { return itemId.starts_with(kItemIdPrefix); }
   [[nodiscard]] std::size_t itemCount() const noexcept { return m_icons.size(); }
@@ -85,6 +95,31 @@ private:
     TrayItemInfo info;
   };
 
+  // A context-menu click was forwarded; the next plausible menu window
+  // mapped on the root within the deadline is taken as its context menu.
+  struct PendingMenuClick {
+    wl_output* output = nullptr;
+    std::int32_t x = 0;
+    std::int32_t y = 0;
+    std::string barEdge;
+    std::chrono::steady_clock::time_point deadline;
+  };
+
+  // A menu window was seen; keep asking the place callback to move it until
+  // it succeeds (the compositor lists mapped windows asynchronously) or the
+  // deadline passes.
+  struct PendingMenuPlacement {
+    std::string title;
+    wl_output* output = nullptr;
+    std::int32_t x = 0;
+    std::int32_t y = 0;
+    std::string barEdge;
+    std::uint16_t width = 0;
+    std::uint16_t height = 0;
+    std::chrono::steady_clock::time_point deadline;
+    std::chrono::steady_clock::time_point nextAttempt;
+  };
+
   void teardown();
   void processEvents();
   void handleClientMessage(const xcb_client_message_event_t& event);
@@ -94,8 +129,12 @@ private:
   void removeIcon(xcb_window_t window);
   void refreshIconMetadata(xcb_window_t window);
   [[nodiscard]] xcb_window_t windowFromItemId(std::string_view itemId) const;
+  [[nodiscard]] static std::pair<double, double>
+  clickToOutputLocal(std::int32_t x, std::int32_t y, const OutputGeometry& geometry, std::string_view barEdge);
   [[nodiscard]] std::optional<std::pair<std::int16_t, std::int16_t>>
   mapClickToXRoot(std::int32_t x, std::int32_t y, wl_output* output, std::string_view barEdge) const;
+  void maybeCaptureMenuWindow(const xcb_map_notify_event_t& event);
+  void attemptMenuPlacement();
   bool
   sendClick(xcb_window_t window, std::uint8_t button, std::optional<std::pair<std::int16_t, std::int16_t>> rootPos);
   [[nodiscard]] xcb_atom_t internAtom(const char* name);
@@ -121,4 +160,7 @@ private:
   std::map<xcb_window_t, Icon> m_icons;
   ChangeCallback m_changeCallback;
   OutputGeometryResolver m_outputResolver;
+  MenuPlaceCallback m_menuPlaceCallback;
+  std::optional<PendingMenuClick> m_pendingMenuClick;
+  std::optional<PendingMenuPlacement> m_pendingMenuPlacement;
 };
