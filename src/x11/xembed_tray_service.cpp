@@ -282,15 +282,17 @@ bool XEmbedTrayService::looksLikeOrphanedWineTrayIcon(xcb_window_t window) const
   // (tiny and unmapped, waiting for the tray to embed it), but its one dock
   // request raced the host swap and went to the dying selection owner. Wine
   // never retries, so the icon sits as an unmapped, icon-bearing, Wine-owned
-  // root child until someone embeds it. That state never occurs for windows
-  // a tray should leave alone, so adopt it like the dock request we missed.
+  // root child until someone embeds it. Require non-override-redirect on top:
+  // Wine tooltips are also tiny, unmapped and carry the process _NET_WM_ICON,
+  // but are override-redirect - adopting one shows a convincing ghost icon
+  // that swallows every click.
   if (window == XCB_NONE || m_icons.contains(window)) {
     return false;
   }
   const XcbReply<xcb_get_window_attributes_reply_t> attributes(
       xcb_get_window_attributes_reply(m_conn, xcb_get_window_attributes(m_conn, window), nullptr)
   );
-  if (attributes == nullptr || attributes->map_state == XCB_MAP_STATE_VIEWABLE) {
+  if (attributes == nullptr || attributes->map_state == XCB_MAP_STATE_VIEWABLE || attributes->override_redirect != 0) {
     return false;
   }
   const XcbReply<xcb_get_geometry_reply_t> geometry(
