@@ -243,7 +243,7 @@ void XEmbedTrayService::adoptOrphanedWineTrayWindows() {
 
   const xcb_window_t* children = xcb_query_tree_children(tree.get());
   for (int i = 0; i < xcb_query_tree_children_length(tree.get()); ++i) {
-    if (looksLikeWineTrayStrip(children[i])) {
+    if (looksLikeWineTrayStrip(children[i]) || looksLikeOrphanedWineTrayIcon(children[i])) {
       dockIcon(children[i]);
     }
   }
@@ -273,6 +273,40 @@ bool XEmbedTrayService::looksLikeWineTrayStrip(xcb_window_t window) const {
     return false;
   }
   kLog.info("adopting Wine standalone tray window 0x{:x} ({}x{})", window, geometry->width, geometry->height);
+  return true;
+}
+
+bool XEmbedTrayService::looksLikeOrphanedWineTrayIcon(xcb_window_t window) const {
+  // A tray restart can strand a Wine icon in dock-pending limbo: Wine reacts
+  // to the teardown handover by recreating the icon window in docked style
+  // (tiny and unmapped, waiting for the tray to embed it), but its one dock
+  // request raced the host swap and went to the dying selection owner. Wine
+  // never retries, so the icon sits as an unmapped, icon-bearing, Wine-owned
+  // root child until someone embeds it. That state never occurs for windows
+  // a tray should leave alone, so adopt it like the dock request we missed.
+  if (window == XCB_NONE || m_icons.contains(window)) {
+    return false;
+  }
+  const XcbReply<xcb_get_window_attributes_reply_t> attributes(
+      xcb_get_window_attributes_reply(m_conn, xcb_get_window_attributes(m_conn, window), nullptr)
+  );
+  if (attributes == nullptr || attributes->map_state == XCB_MAP_STATE_VIEWABLE) {
+    return false;
+  }
+  const XcbReply<xcb_get_geometry_reply_t> geometry(
+      xcb_get_geometry_reply(m_conn, xcb_get_geometry(m_conn, window), nullptr)
+  );
+  if (geometry == nullptr || geometry->width > 32 || geometry->height > 32) {
+    return false;
+  }
+  auto hasProperty = [this](xcb_window_t w, xcb_atom_t property) {
+    const auto reply = getProperty(m_conn, w, property, XCB_ATOM_ANY, 0);
+    return reply != nullptr && reply->type != XCB_NONE;
+  };
+  if (!hasProperty(window, m_atomWineHwndStyle) || !hasProperty(window, m_atomNetWmIcon)) {
+    return false;
+  }
+  kLog.info("adopting orphaned Wine tray icon 0x{:x} ({}x{})", window, geometry->width, geometry->height);
   return true;
 }
 
@@ -309,9 +343,12 @@ void XEmbedTrayService::maybeCaptureMenuWindow(const xcb_map_notify_event_t& eve
     m_pendingMenuClick.reset();
     return;
   }
-  // Context menus are override-redirect root children of plausible menu size;
-  // this screens out the 1x1 grab helpers Wine maps alongside them.
-  if (event.window == m_host || m_icons.contains(event.window) || event.override_redirect == 0) {
+  // The context menu is the first named, menu-sized window to map after the
+  // click. Not necessarily override-redirect: clients like Battle.net draw
+  // their menu in a plain window. Size and name screen out the small
+  // nameless grab/tooltip helpers Wine maps alongside it; those just leave
+  // the pending click armed for the real menu.
+  if (event.window == m_host || m_icons.contains(event.window)) {
     return;
   }
   const XcbReply<xcb_get_geometry_reply_t> geometry(
@@ -326,12 +363,11 @@ void XEmbedTrayService::maybeCaptureMenuWindow(const xcb_map_notify_event_t& eve
     title = propertyString(m_conn, event.window, XCB_ATOM_WM_NAME, XCB_ATOM_ANY);
   }
   if (title.empty()) {
-    // No name to find the compositor-side window by; leave it where it is.
-    m_pendingMenuClick.reset();
+    // No name to find the compositor-side window by.
     return;
   }
 
-  kLog.debug("xembed menu window 0x{:x} '{}' mapped, requesting placement", event.window, title);
+  kLog.info("xembed menu window 0x{:x} '{}' mapped, requesting placement", event.window, title);
   m_pendingMenuPlacement = PendingMenuPlacement{
       .title = std::move(title),
       .output = m_pendingMenuClick->output,
