@@ -361,6 +361,8 @@ struct IdleConfig {
   /// from transparent to opaque over this many seconds, then runs `command`. Compositor activity during
   /// the fade cancels. When 0, the idle command runs immediately with no overlay.
   float preActionFadeSeconds = 2.0F;
+  /// D-Bus ScreenSaver inhibits whose app name or sender comm equals/contains an entry (case-insensitive) are ignored.
+  std::vector<std::string> ignoreInhibitors;
 
   bool operator==(const IdleConfig&) const = default;
 };

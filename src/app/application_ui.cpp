@@ -824,6 +824,7 @@ void Application::initNotificationAndOsd() {
   m_idleManager.reload(m_configService.config().idle);
   try {
     m_screenSaverService = std::make_unique<ScreenSaverService>(m_systemBus.get());
+    m_screenSaverService->setIgnoreList(m_configService.config().idle.ignoreInhibitors);
     if (m_screenSaverService->active()) {
       m_screenSaverService->setChangeCallback([this](std::int64_t locks) {
         m_idleManager.setScreenSaverInhibitLocks(locks);
@@ -843,6 +844,9 @@ void Application::initNotificationAndOsd() {
       [this] {
         if (m_configService.lastChange().idle) {
           m_idleManager.reload(m_configService.config().idle);
+          if (m_screenSaverService != nullptr) {
+            m_screenSaverService->setIgnoreList(m_configService.config().idle.ignoreInhibitors);
+          }
         }
       },
       "idle"

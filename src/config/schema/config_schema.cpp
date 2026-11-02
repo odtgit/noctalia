@@ -1081,6 +1081,7 @@ namespace noctalia::config::schema {
   const Schema<IdleConfig>& idleSchema() {
     static const Schema<IdleConfig> s = {
         field(&IdleConfig::preActionFadeSeconds, "pre_action_fade_seconds", Range<float>{0.0F, 120.0F}),
+        field(&IdleConfig::ignoreInhibitors, "ignore_inhibitors"),
         // behavior_order is emitted here (vector order); the actual reorder runs
         // last, after the behavior map has been read.
         custom<IdleConfig>(

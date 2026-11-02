@@ -4,7 +4,9 @@
 #include "dbus/system_bus.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
+#include <fstream>
 #include <map>
 #include <utility>
 #include <vector>
@@ -66,7 +68,7 @@ std::vector<std::pair<std::string, std::string>> ScreenSaverService::inhibitorLi
   std::vector<std::pair<std::string, std::string>> result;
   result.reserve(m_cookies.size());
   for (const auto& cookie : m_cookies) {
-    result.emplace_back(cookie.app, cookie.reason);
+    result.emplace_back(cookie.ignored ? cookie.app + " (ignored)" : cookie.app, cookie.reason);
   }
   return result;
 }
@@ -211,20 +213,65 @@ void ScreenSaverService::applyLogindBlockInhibited(const std::string& inhibits) 
   const bool idleBlocked = tagged.contains(":idle:");
   if (idleBlocked && !m_logindIdleInhibited) {
     m_logindIdleInhibited = true;
-    onInhibitDelta(1);
+    recomputeLocks();
     kLog.info("systemd idle inhibit active");
   } else if (!idleBlocked && m_logindIdleInhibited) {
     m_logindIdleInhibited = false;
-    onInhibitDelta(-1);
+    recomputeLocks();
     kLog.info("systemd idle inhibit released");
   }
 }
 
+namespace {
+
+  std::string lowerCopy(std::string s) {
+    std::ranges::transform(s, s.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return s;
+  }
+
+} // namespace
+
+std::string ScreenSaverService::senderComm(const char* sender) const {
+  if (sender == nullptr || m_dbusProxy == nullptr) {
+    return {};
+  }
+  try {
+    std::uint32_t pid = 0;
+    m_dbusProxy->callMethod("GetConnectionUnixProcessID")
+        .onInterface("org.freedesktop.DBus")
+        .withArguments(std::string(sender))
+        .storeResultsTo(pid);
+    std::ifstream in("/proc/" + std::to_string(pid) + "/comm");
+    std::string comm;
+    std::getline(in, comm);
+    return comm;
+  } catch (const std::exception& e) {
+    kLog.debug("sender pid lookup failed for {}: {}", sender, e.what());
+    return {};
+  }
+}
+
+bool ScreenSaverService::matchesIgnore(const std::string& app, const std::string& comm) const {
+  const std::string a = lowerCopy(app);
+  const std::string c = lowerCopy(comm);
+  return std::ranges::any_of(m_ignore, [&](const std::string& entry) {
+    const std::string e = lowerCopy(entry);
+    return !e.empty() && (a.contains(e) || c.contains(e));
+  });
+}
+
+void ScreenSaverService::setIgnoreList(std::vector<std::string> ignore) {
+  m_ignore = std::move(ignore);
+  for (auto& c : m_cookies) {
+    c.ignored = matchesIgnore(c.app, c.comm);
+  }
+  recomputeLocks();
+}
+
 std::uint32_t ScreenSaverService::onInhibit(std::string app, std::string reason, const char* sender) {
-  onInhibitDelta(1);
-  kLog.debug(
-      "screensaver inhibit from {} ({}): {} (locks={})", app, sender != nullptr ? sender : "?", reason, m_inhibitLocks
-  );
+  std::string comm = senderComm(sender);
+  const bool ignored = matchesIgnore(app, comm);
+  kLog.info("inhibit app='{}' comm='{}' reason='{}' ignored={}", app, comm, reason, ignored);
 
   const auto cookie = m_nextCookieId++;
   m_cookies.push_back(
@@ -233,8 +280,11 @@ std::uint32_t ScreenSaverService::onInhibit(std::string app, std::string reason,
           .app = std::move(app),
           .reason = std::move(reason),
           .ownerId = sender != nullptr ? std::string(sender) : std::string{},
+          .comm = std::move(comm),
+          .ignored = ignored,
       }
   );
+  recomputeLocks();
   return cookie;
 }
 
@@ -247,15 +297,20 @@ void ScreenSaverService::onUninhibit(std::uint32_t cookie, const char* sender) {
 
   const InhibitCookie released = std::move(*it);
   m_cookies.erase(it);
-  onInhibitDelta(-1);
-  kLog.debug(
-      "screensaver uninhibit from {} ({}): {} (locks={})", released.app, sender != nullptr ? sender : "?",
-      released.reason, m_inhibitLocks
+  kLog.info(
+      "uninhibit app='{}' comm='{}' reason='{}' ignored={}", released.app, released.comm, released.reason,
+      released.ignored
   );
+  recomputeLocks();
 }
 
-void ScreenSaverService::onInhibitDelta(std::int64_t delta) {
-  m_inhibitLocks = std::max<std::int64_t>(0, m_inhibitLocks + delta);
+void ScreenSaverService::recomputeLocks() {
+  const auto counted = std::ranges::count(m_cookies, false, &InhibitCookie::ignored);
+  const std::int64_t next = static_cast<std::int64_t>(counted) + (m_logindIdleInhibited ? 1 : 0);
+  if (next == m_inhibitLocks) {
+    return;
+  }
+  m_inhibitLocks = next;
   if (m_changeCallback) {
     m_changeCallback(m_inhibitLocks);
   }
@@ -273,8 +328,11 @@ std::size_t ScreenSaverService::unregisterOwnerCookies(const std::string& ownerI
       continue;
     }
     ++removed;
+    kLog.info(
+        "uninhibit app='{}' comm='{}' reason='{}' ignored={} (client gone)", it->app, it->comm, it->reason, it->ignored
+    );
     it = m_cookies.erase(it);
-    onInhibitDelta(-1);
   }
+  recomputeLocks();
   return removed;
 }

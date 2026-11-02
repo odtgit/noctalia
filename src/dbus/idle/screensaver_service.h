@@ -30,6 +30,7 @@ public:
   std::vector<std::pair<std::string, std::string>> inhibitorList() const;
   void processPendingEvents();
   void setChangeCallback(ChangeCallback callback);
+  void setIgnoreList(std::vector<std::string> ignore);
 
   /// Emits ActiveChanged on each registered org.freedesktop.ScreenSaver object.
   void emitActiveChanged(bool active);
@@ -40,6 +41,8 @@ private:
     std::string app;
     std::string reason;
     std::string ownerId;
+    std::string comm;
+    bool ignored = false;
   };
 
   void registerScreenSaver();
@@ -47,7 +50,9 @@ private:
   void applyLogindBlockInhibited(const std::string& inhibits);
   std::uint32_t onInhibit(std::string app, std::string reason, const char* sender);
   void onUninhibit(std::uint32_t cookie, const char* sender);
-  void onInhibitDelta(std::int64_t delta);
+  void recomputeLocks();
+  bool matchesIgnore(const std::string& app, const std::string& comm) const;
+  std::string senderComm(const char* sender) const;
   std::size_t unregisterOwnerCookies(const std::string& ownerId);
 
   ChangeCallback m_changeCallback;
@@ -57,6 +62,7 @@ private:
   std::int64_t m_inhibitLocks = 0;
   std::uint32_t m_nextCookieId = 1337;
   bool m_active = false;
+  std::vector<std::string> m_ignore;
   bool m_logindIdleInhibited = false;
   bool m_hasPendingEvents = false;
   std::vector<InhibitCookie> m_cookies;
